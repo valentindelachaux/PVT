@@ -3,13 +3,14 @@ import copy
 import pandas as pd
 import numpy as np
 import heat_transfer as bht
+import ht
 
 # %run C:\Users\BU05\Documents\Modele1D_Type560\Type560.py
 
 # Parameters
 
 # "sigma", "eta_nom","Eff_T","T_ref","Eff_G","G_ref","X_rad","X_corr","W","D_tube","N_harp",
-# "L_riser","tau_alpha","eps","k_abs","lambd_abs","h_fluid","R_TOP","R_INTER","R_B","C_B","G_T0",
+# "L_riser","tau_alpha","eps","k_abs","lambd_abs","h_fluid","R_TOP","R_INTER","C_B","G_T0",
 # "G_p","T_sky","T_amb","T_back","T_fluid_in0","C_p","m_dot","theta"
 
 # Function for Excel
@@ -41,7 +42,6 @@ def change_u(par,wind_speed):
     new_h_wind = a_w*wind_speed+b_w
 
     par["h_top"]=new_h_wind
-    par["R_T"]= par["R_TOP"] + 1/par["h_top"]
 
 def tanh_or_inverse(arg):
     return math.tanh(arg)
@@ -60,14 +60,15 @@ def h_fluid(parameters):
 
     fluid_speed = flow_rate_per_riser/tube_section
 
+    L_riser = parameters["L_riser"]
+
     Re = (rho_fluid*fluid_speed*D_tube)/mu_fluid
 
     Pr_fluid = 7.
 
-    if Re<2000:
-        Nu_fluid = 0.7*0.023*(Re**0.8)*(Pr_fluid**0.4)
-    else:
-        Nu_fluid = 0.023*(Re**0.8)*(Pr_fluid**0.4)
+    eD = 0.0015/D_tube
+
+    Nu_fluid = ht.Nu_conv_internal(Re,Pr_fluid,eD,D_tube,L_riser) # check which method is selected
 
     parameters["h_fluid"] = (k_fluid/D_tube)*Nu_fluid
 
@@ -82,7 +83,7 @@ def h_top(parameters,var):
     T_PV = var["T_PV"]
     T_amb = parameters["T_amb"]
 
-    h = parameters["coeff_h_top"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["longueur"])
+    h = parameters["coeff_h_top"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["L_abs"])
 
     parameters["b_htop"]=h
 
@@ -93,11 +94,11 @@ def h_inner(parameters,var):
     elif parameters["fin_0"] >= 1 or parameters["fin_1"] >= 1 or parameters["fin_2"] >= 1:
         if parameters["geometry"]=="harp":
             D_4 = parameters["D_4"]
-            parameters["h_inner"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D_4,parameters["Heta"])
+            parameters["h_inner"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["L_abs"],D_4,parameters["Heta"])
 
         else:
             D = parameters["D"]
-            parameters["h_inner"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D,parameters["Heta"])
+            parameters["h_inner"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["L_abs"],D,parameters["Heta"])
     else:
         # theta est l'inclinaison du panneau par rapport à l'horizontale
         T_ref = var["T_abs_mean"]
@@ -108,10 +109,10 @@ def h_inner(parameters,var):
 
             T_ref = T_ref + (R_2/(R_2+1/h_back))
 
-        res = parameters["coeff_h_back"]*bht.back_h_simple(T_ref,parameters["T_back"],parameters["theta"],parameters["longueur"])
+        res = parameters["coeff_h_back"]*bht.back_h_simple(T_ref,parameters["T_back"],parameters["theta"],parameters["L_abs"])
         if res == None:
             print('res = None in h_inner()')
-            print('longueur',parameters["longueur"])
+            print('L_abs',parameters["L_abs"])
             print('T_abs',var["T_abs_mean"])
             print('theta',parameters["theta"])
             print('T_back',parameters["T_back"])
@@ -123,7 +124,7 @@ def h_inner_mean(parameters,var):
     if parameters["geometry"] == "harp":
         D_4 = parameters["D_4"]
         old_h_inner = parameters["h_inner"]
-        new_h_inner = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D_4,parameters["L_a"])
+        new_h_inner = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["L_abs"],D_4,parameters["Heta"])
         if abs(new_h_inner - old_h_inner) > 0.1:
             parameters["h_inner"] = (old_h_inner+new_h_inner)/2
         else:
@@ -133,9 +134,9 @@ def h_inner_mean(parameters,var):
         D = parameters["D"]
         old_h_inner = parameters["h_inner"]
         if parameters["N_ail"]<= 24:
-            new_h_inner = parameters["coeff_h_back"]*bht.back_h_simple(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"])
+            new_h_inner = parameters["coeff_h_back"]*bht.back_h_simple(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["L_abs"])
         else:
-            new_h_inner = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D,parameters["Heta"])
+            new_h_inner = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["L_abs"],D,parameters["Heta"])
         if abs(new_h_inner - old_h_inner) > 0.1:
             parameters["h_inner"] = (old_h_inner+new_h_inner)/2
         else:
@@ -249,7 +250,7 @@ def gamma(parameters):
     alpha = parameters["alpha_ail"]
     beta = parameters["beta_ail"]
     a = parameters["lambd_ail"]
-    L_a = parameters["L_a"]
+    L_a = parameters["Heta"]
 
     arg = (alpha*L_a)/a
     numerateur = (alpha/a)*math.sinh(arg) + ((beta*alpha)/a)*math.cosh(arg)
@@ -1228,18 +1229,18 @@ def test_meander_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,
  
 #     N_meander = parameters["N_meander"]
 #     delta = parameters["delta"]
-#     longueur = parameters["longueur"]
+#     L_abs = parameters["L_abs"]
     
 
 #     k_ail = parameters["k_ail"]
 #     a = parameters["lambd_ail"]
 #     DELTA_a = parameters["DELTA_a"]
 
-#     #return 2*N_meander*(delta/longueur)*k_ail*a*DELTA_a*gamm*DT
+#     #return 2*N_meander*(delta/L_abs)*k_ail*a*DELTA_a*gamm*DT
 
 #     #return parameters["h_inner"]
 #     #return gamm
-#     return -((longueur-N_meander*D_tube)/longueur)*k_ail*a*DELTA_a*gamm*DT
+#     return -((L_abs-N_meander*D_tube)/L_abs)*k_ail*a*DELTA_a*gamm*DT
 
 def change_N_ail(parameters,N):
     parameters["N_ail"] = N
