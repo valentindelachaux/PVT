@@ -11,7 +11,7 @@ import os
 
 # Create par
 
-def create_inputs():
+def create_inputs(cond):
     ## Meteo inputs for tests
 
     # Simulations with different meteos
@@ -34,9 +34,8 @@ def create_inputs():
 
     # TUV
     path = os.getcwd()
-    cond = r'\220321_TUV_test_conditions.xlsx'
     fichier = path+cond
-    condi = pd.read_excel(fichier,"Non insulated v4 TUV")
+    condi = pd.read_excel(fichier,"Data")
     condi.drop(index=condi.index[0], 
         axis=0, 
         inplace=True)
@@ -52,7 +51,7 @@ def create_out():
         os.makedirs(pathout)
 
     wbo = opxl.Workbook()
-    return wbo
+    return pathout,wbo
 
 def create_par():
     par = {}
@@ -203,8 +202,6 @@ def create_par():
     list_parameters = []
     *list_parameters, = par
 
-    print(list_parameters)
-
     path = os.getcwd()
     print(path)
 
@@ -254,13 +251,13 @@ def pre_proc(test):
     elif test == "T_guess":
         return np.linspace(280,300,11)
     elif test == "L_f2" or test == "L_f2_TUV":
-        return np.linspace(0,0.5,30)
+        return np.linspace(0.001,0.2,30)
     elif test == "coeff_h_top_TUV":
         return [0.9,1,1.05,1.1,1.15,1.2]
     elif test == "coeff_h_back_TUV":
         return np.linspace(1,2,21)
     elif test == "N_riser":
-        return [3,6,9,12,15,18,21,24,30,40,50,60,80,100,120,140,160,180]
+        return [3,6,9,12,15,18,21,24,30,40,50,60]
     elif test == "N_fins_per_EP":
         return [6,7,8,10,11,12,13,14,15,16,18,20,22]
     elif test == "coeff_h_top":
@@ -268,7 +265,7 @@ def pre_proc(test):
     elif test == "b_htop":
         return np.linspace(1,5,6)
     elif test == "parametric_insulation":
-        return np.linspace(0,0.1,21)
+        return np.linspace(0,0.1,31)
     elif test == "iota":
         return [0.,0.02,0.05,0.08,0.1,0.2,0.5,1]
     elif test == "D_tube":
@@ -280,7 +277,7 @@ def pre_proc(test):
     elif test == "absorber":
         return [4,50,100,150,200,250,300,400]
     elif test == "e_abs":
-        return np.linspace(0.00001,0.002,10)
+        return np.linspace(0.0001,0.003,50)
     elif test == "a_htop_TUV":
         return [0.5,1,1.5,2,3,4,5,6,7,8,9,10]
     elif test == "N_f1_TUV":
@@ -296,6 +293,7 @@ def proc(par,test,i,test_list):
         T_guess_list = [test_list[i]]
     elif test == "L_f2" or test =="L_f2_TUV":
         par["L_f2"] = test_list[i]
+        par["Heta"] = test_list[i]
     elif test == "coeff_h_top_TUV":
         par["coeff_h_top"] = test_list[i]
     elif test == "coeff_h_back_TUV":
@@ -310,7 +308,7 @@ def proc(par,test,i,test_list):
             par["W"]=par["w_abs"]/test_list[i]
 
         par["l_i"]=par["W"]
-        par["delta"] = (par["W"]-par["D_tube"])/2
+        par["delta"] = (par["W"]-par["Dext_tube"])/2
         par["L_af"]=(par["W"]-par["l_B"])/2
     elif test == "N_fins_per_EP":
         ty.change_N_fins_per_EP(par,test_list[i])
@@ -334,11 +332,16 @@ def proc(par,test,i,test_list):
     elif test == "absorber":
         par["k_abs"]=test_list[i]
     elif test == "e_abs":
+        R_INTER = par["R_INTER"]
+        old_R_abs = par["lambd_abs"]/par["k_abs"]
         par["lambd_abs"]=test_list[i]
+        new_R_abs = par["lambd_abs"]/par["k_abs"]
+        par["R_INTER"] = R_INTER - old_R_abs + new_R_abs
     elif test == "a_htop_TUV":
         par["a_htop"] = test_list[i]
     elif test == "N_f1_TUV":
         par["N_f1"] = test_list[i]
         par["N_ail"] = test_list[i]
+        par["D"] = (par["w_abs"]-par["N_ail"]*par["lambd_ail"])/(par["N_ail"]-1)
     else:
         pass
