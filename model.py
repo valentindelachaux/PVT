@@ -83,9 +83,20 @@ def h_top(parameters,var):
     T_PV = var["T_PV"]
     T_amb = parameters["T_amb"]
 
+<<<<<<< HEAD
     h = parameters["coeff_h_top"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["L_abs"])
+=======
+<<<<<<< Updated upstream
+    h = parameters["coeff_h_top"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["longueur"])
+=======
+    h_free = parameters["coeff_h_top"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["L_abs"])
 
-    parameters["b_htop"]=h
+    h_forced = parameters["b_htop"]+parameters["a_htop"]*parameters["u"]
+
+    parameters["h_top"] = (h_free**3 + h_forced**3)**(1/3)
+>>>>>>> Stashed changes
+>>>>>>> model
+
 
 def h_inner(parameters,var):
     if var["T_abs_mean"]==None:
@@ -642,18 +653,23 @@ def T_PV_mean(parameters,var):
     var["T_PV0"] = var["T_PV"]
     var["T_PV"] = res
 
-def T_PV_27(parameters,var):
-    l_B = parameters["l_B"]
-    iota = parameters["iota"]
-    R_INTER = parameters["R_INTER"]
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+def T_PV_meanB(parameters,var):
 
-    T_B = var["T_Base_mean"]
-    T_back = parameters["T_back"]
-    qp_fluid = var["qp_fluid"]
-    qp_fin = var["qp_fin"]
+    R_INTER = parameters["R_INTER"]
+    R_T = parameters["R_TOP"] + 1/parameters["h_top"]
+    h_fluid = parameters["h_fluid"]
+
+    T_sky = parameters["T_sky"]
+    T_amb = parameters["T_amb"]
     
-    var["T_PV"] = (1/l_B)*(R_INTER*qp_fluid+l_B*T_B+iota*(R_INTER/R_B)*(T_B-T_back)-2*R_INTER*qp_fin)
+    h_rad = var["h_rad"]
+    S = var["S"]
+
+    T_Base_mean = var["T_Base_mean"]
+
+    res = (1/(1/R_T+h_rad+1/R_INTER))*(S+T_amb/R_T+h_rad*T_sky+(T_Base_mean/R_INTER))
+
+    var["T_PV_meanB"] = res
 
 # Eq. 560.47
 def Q_top_conv(parameters,var):
@@ -702,13 +718,13 @@ def power_balance_1(parameters,var):
 def Q_PV_Base(parameters,var):
 
     R_INTER = parameters["R_INTER"]
-    D_tube = parameters["D_tube"]
+    l_B = parameters["l_B"]
 
-    T_PV_m = var["T_PV"]
+    T_PV_mB = var["T_PV_meanB"]
     T_Base_m = var["T_Base_mean"]
     L = parameters["L_riser"]
 
-    var["Q_PV_Base"] = L*D_tube*((T_PV_m-T_Base_m)/R_INTER)
+    var["Q_PV_Base"] = L*l_B*((T_PV_mB-T_Base_m)/R_INTER)
 
 def qp_PV_Base(parameters,var):
 
@@ -724,13 +740,13 @@ def qp_PV_Base(parameters,var):
 def Q_abs_back(parameters,var):
 
     R_B = parameters["R_2"] + 1/parameters["h_inner"]
-    delta = parameters["delta"]
+    L_af = parameters["L_af"]
 
     T_abs_m = var["T_abs_mean"]
     T_back = parameters["T_back"]
     L = parameters["L_riser"]
 
-    var["Q_abs_back"] = L*delta*(T_abs_m-T_back)/R_B
+    var["Q_abs_back"] = L*L_af*(T_abs_m-T_back)/R_B
 
 def Q_fluid(parameters,var):
 
@@ -790,8 +806,9 @@ def power_balance_3(parameters,var):
     Q_absfins_Base = var["Q_absfins_Base"]
     Q_fluid = var["Q_fluid1"]
     Q_Base_back = var["Q_Base_back"]
+    Q_fluid_back = var["Q_fluid_back"]
 
-    var["power_balance_3"] = Q_PV_Base + Q_absfins_Base - Q_fluid - Q_Base_back
+    var["power_balance_3"] = Q_PV_Base + Q_absfins_Base - (Q_fluid + Q_fluid_back) - Q_Base_back
 
 def PB_3(parameters,var):
     PB3 = var["qp_PV_Base"] - var["qp_Base_back"] + 2*var["qp_fin"]-var["qp_fluid"]
@@ -894,6 +911,7 @@ def one_loop(parameters,T_fluid_in,var):
         h_inner(parameters,var)
 
     T_PV_mean(parameters,var)
+    T_PV_meanB(parameters,var)
 
     qp_PV_Base(parameters,var)
     qp_Base_back(parameters,var)
@@ -903,7 +921,7 @@ def one_loop(parameters,T_fluid_in,var):
 
 # parameters and var are dictionnaries
 # Division of the panel in N rectangles (N=16)
-def meander(parameters,var,N,T_fluid_in,guess_T_PV,res):
+def simu_one_steady_state(parameters,var,N,T_fluid_in,guess_T_PV,res):
     var["T_PV0"] = 0
     var["T_PV"] = guess_T_PV
 
@@ -1008,7 +1026,7 @@ def meander(parameters,var,N,T_fluid_in,guess_T_PV,res):
         return list_var,list_var_conv
 
 # Test une liste de températures du fluide en entrée
-def test_meander(parameters,T_fluid_in_list,T_guess):
+def simu_steady_states_for_Tfluidin_list(parameters,T_fluid_in_list,T_guess):
     
     N=parameters["N_meander"]
 
@@ -1022,7 +1040,7 @@ def test_meander(parameters,T_fluid_in_list,T_guess):
 
         var = {}
         T_f_in = T_fluid_in_list[i]
-        T_f_out,T_abs_meanx,h_back = meander(parameters,var,N,T_f_in,T_guess,"T_f_out")
+        T_f_out,T_abs_meanx,h_back = simu_one_steady_state(parameters,var,N,T_f_in,T_guess,"T_f_out")
 
         T_fluid_out_list.append(T_f_out)
         T_abs_list.append(T_abs_meanx)
@@ -1030,7 +1048,7 @@ def test_meander(parameters,T_fluid_in_list,T_guess):
 
     return T_fluid_out_list,T_abs_list,h_back_list
 
-def test_condi_list(par,condi_df):
+def simu_condi(par,condi_df):
     
     variables = ['N_test','T_guess','G', 'Gp', 'T_amb', 'u', 'T_abs','T_fluid_in', 'T_fluid_out']
     
@@ -1048,10 +1066,7 @@ def test_condi_list(par,condi_df):
         # T_amb = T_back
         par["T_amb"]=condi_df["ta"][i]+273.15
 
-        #G'
-        #par["T_sky"]=92
-        #par["G_p"] = sigma*(par["T_sky"]**4 - par["T_amb"]**4)       
-        par["G_p"] = 4
+        change_T_sky(par,'TUV')
 
         # Back temperature = ambiant temperature
         par["T_back"]=par["T_amb"]
@@ -1064,7 +1079,7 @@ def test_condi_list(par,condi_df):
         T_f_in_list = [condi_df["tin"][i]+273.15]                
         T_guess = (par["T_amb"]+T_f_in_list[0])/2
 
-        T_f_out_list,T_abs_list,h_back_list = test_meander(par,T_f_in_list,T_guess)
+        T_f_out_list,T_abs_list,h_back_list = simu_steady_states_for_Tfluidin_list(par,T_f_in_list,T_guess)
         
         # len(T_f_out_list) = 1
 
@@ -1076,14 +1091,16 @@ def test_condi_list(par,condi_df):
 
     # Analysing df
 
+    # Be careful here you have zeros for some columns
+
     df['DT'] = df['T_fluid_out'] - df['T_fluid_in']
     df['T_m'] = (df['T_fluid_out'] + df['T_fluid_in'])/2
     df['T_m*'] = (df['T_m'] - df['T_amb'])/df['G']
     df['G x (T_m*)^2'] = df['G'] * df['T_m*']**2 * 0
     df['up x T_m*'] = (df['u'] - 3) * df['T_m*']
-    df['Gp/G'] = df['Gp']/df['G'] * 0
+    df['Gp/G'] = df['Gp']/df['G']
     df['up'] = df['u'] - 3
-    df['up x Gp/G'] = (df['up'] * df['Gp'])/df['G'] * 0
+    df['up x Gp/G'] = (df['up'] * df['Gp'])/df['G']
     df['G^3 x (T_m*)^4'] = df['G']**3 * df['T_m*']**4 * 0
 
     df['T_m en °C'] = df['T_m']-273.15
@@ -1118,7 +1135,7 @@ def test_condi_list(par,condi_df):
 
     return df_par,df,X
 
-def test_meander_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,T_f_in_list):
+def simu_multi_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,T_f_in_list):
 
     variables = ['N_test','T_guess','G', 'Gp', 'T_amb', 'u', 'T_abs','T_fluid_in', 'T_fluid_out']
     # Dataframe object
@@ -1135,11 +1152,10 @@ def test_meander_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,
             for r in range(len(T_amb_list)):
                 # T_amb = T_back
                 par["T_amb"]=T_amb_list[r]
-
+                
                 # Sky temperature is adjusted according to ambiant temperature
                 
-                par["T_sky"]=T_amb_list[r]+par["coeff_G_p"]
-                par["G_p"] = sigma*(par["T_sky"]**4 - par["T_amb"]**4)
+                change_T_sky(par,'outdoor')
 
                 # Back temperature = ambiant temperature
                 par["T_back"]=T_amb_list[r]
@@ -1150,7 +1166,7 @@ def test_meander_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,
 
                     for s in range(len(T_guess_list)):
                         
-                        T_f_out_list,T_abs_list,h_back_list = test_meander(par,T_f_in_list,T_guess_list[s])
+                        T_f_out_list,T_abs_list,h_back_list = simu_steady_states_for_Tfluidin_list(par,T_f_in_list,T_guess_list[s])
 
                         for l in range(len(T_f_out_list)):
                             
@@ -1178,7 +1194,6 @@ def test_meander_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,
     df['up'] = df['u'] - 3
     df['up x Gp/G'] = (df['up'] * df['Gp'])/df['G']
     df['G^3 x (T_m*)^4'] = df['G']**3 * df['T_m*']**4 * 0
-
 
 
     df['T_m en °C'] = df['T_m']-273.15
@@ -1241,6 +1256,17 @@ def test_meander_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,
 #     #return parameters["h_inner"]
 #     #return gamm
 #     return -((L_abs-N_meander*D_tube)/L_abs)*k_ail*a*DELTA_a*gamm*DT
+
+def change_T_sky(parameters,type):
+    if type == "TUV":
+        parameters["G_p"] = 4
+        parameters["T_sky"] = ((parameters["G_p"]/parameters["sigma"]) + parameters["T_amb"]**4)**(1/4)
+    
+    else :
+        Tsk = 0.0552*parameters["T_amb"]**1.5
+
+        parameters["T_sky"] = Tsk
+        parameters["G_p"] = parameters["sigma"]*(parameters["T_sky"]**4 - parameters["T_amb"]**4)
 
 def change_N_ail(parameters,N):
     parameters["N_ail"] = N

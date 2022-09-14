@@ -109,7 +109,7 @@ def back_h_fins(T_abs,T_amb,theta,longueur,D,L_a):
         else:
             return 2
   
-def back_h_simple(T_abs,T_amb,theta,longueur):
+def back_h_simple(T_abs,T_amb,theta,longueur): # dans 'Inputs', theta est l'angle par rapport à l'horizontale donc c'est theta_p
     
     h_back_mean = 2.
 
@@ -134,10 +134,14 @@ def back_h_simple(T_abs,T_amb,theta,longueur):
     if DT<0:
         if theta>45:
             Ra_L=(g*beta*math.cos(math.pi/2-math.radians(theta))*abs(DT)*(longueur**4))/(nu*alpha)
-            if Ra_L >= 1e5 and Ra_L <= 2*1e10:
+            if Ra_L >= 1e4 and Ra_L <= 1e9:
                 Nu_L = 0.68+0.67*Ra_L**(1/4)*(1+(0.492/Pr)**(9/16))**(-4/9)
                 h = (lambd/longueur)*Nu_L
                 return h
+            elif Ra_L >= 1e9:
+                Nu_L = 0.10*Ra_L**(1/3)
+                h = (lambd/longueur)*Nu_L
+                return h  
             else:
                 print('Ra_L',Ra_L)
                 return h_back_mean
@@ -163,6 +167,9 @@ def back_h_simple(T_abs,T_amb,theta,longueur):
                 Nu_L = 0.68+0.67*Ra_L**(1/4)*(1+(0.492/Pr)**(9/16))**(-4/9)
                 h = (lambd/longueur)*Nu_L
                 return h
+            else:
+                print('Ra_L',Ra_L)
+                return h_back_mean
         else:
             print('Ra_L',Ra_L)
             return h_back_mean
@@ -193,17 +200,26 @@ def top_h_simple(T_s,T_amb,theta,longueur):
         return 0.5
 
     if DT>0:
-        if theta<45:
+
+        # Churchill and Chu for theta < 45°
+
+        if theta>45:
             Ra_L=(g*beta*math.cos(math.pi/2-math.radians(theta))*abs(DT)*(longueur**4))/(nu*alpha)
-            if Ra_L >= 1e5 and Ra_L <= 2*1e10:
+            if Ra_L >= 1e4 and Ra_L <= 1e9:
                 Nu_L = 0.68+0.67*Ra_L**(1/4)*(1+(0.492/Pr)**(9/16))**(-4/9)
                 h = (lambd/longueur)*Nu_L
                 return h
+            elif Ra_L >= 1e9:
+                Nu_L = 0.10*Ra_L**(1/3)
+                h = (lambd/longueur)*Nu_L
+                return h           
             else:
                 print('Ra_L',Ra_L)
                 return h_back_mean
         
-        elif theta>=45 and theta>=2:
+        # Raithby and Hollands
+
+        elif theta<=45:
             Ra_L=(g*beta*math.sin(math.pi/2-math.radians(theta))*abs(DT)*(longueur**4))/(nu*alpha)
             if Ra_L>=1e7 and Ra_L<=2*1e11:
                 Nu_L = 0.14*Ra_L**(1/3)*((1+0.0107*Pr)/(1+0.01*Pr))
@@ -217,13 +233,18 @@ def top_h_simple(T_s,T_amb,theta,longueur):
             print('theta',theta)
             return h_back_mean
 
+    # Fujii and Imura
+
     if DT<0:
-        if theta<=88:
+        if theta>=2:
             Ra_L=(g*beta*math.cos(math.pi/2-math.radians(theta))*abs(DT)*(longueur**4))/(nu*alpha)
             if Ra_L >= 1e5 and Ra_L <= 1e11:
                 Nu_L = 0.68+0.67*Ra_L**(1/4)*(1+(0.492/Pr)**(9/16))**(-4/9)
                 h = (lambd/longueur)*Nu_L
                 return h
+            else:
+                print('Ra_L',Ra_L)
+                return h_back_mean
         else:
             print('Ra_L',Ra_L)
             return h_back_mean
