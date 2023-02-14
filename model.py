@@ -3,17 +3,19 @@ import copy
 import pandas as pd
 import numpy as np
 import heat_transfer as bht
+import ht
+
 
 # %run C:\Users\BU05\Documents\Modele1D_Type560\Type560.py
 
 # Parameters
 
 # "sigma", "eta_nom","Eff_T","T_ref","Eff_G","G_ref","X_rad","X_corr","W","D_tube","N_harp",
-# "L_riser","tau_alpha","eps","k_abs","lambd_abs","h_fluid","R_TOP","R_INTER","R_B","C_B","G_T0",
-# "G_p","T_sky","T_amb","T_back","T_fluid_in0","C_p","m_dot","theta"
+# "L_riser","tau_alpha","eps","k_abs","lambd_abs","h_fluid","R_TOP","R_INTER","R_B","C_B","G",
+# "Gp","T_sky","T_amb","T_back","T_fluid_in0","C_p","m_dot","theta"
 
 # Function for Excel
-
+# Search a cell by its nom_variable and return a string like "B3"
 def find_cell_by_name(wb,nom_variable):
     my_range = wb.defined_names[nom_variable]
     ch = my_range.value
@@ -25,12 +27,13 @@ def find_cell_by_name(wb,nom_variable):
 def X_rad(parameters):
     Eff_G = parameters["Eff_G"]
     G_ref = parameters["G_ref"]
-    G_T = parameters["G_T0"]
+    G_T = parameters["G"]
 
     X = 1+Eff_G*(G_T-G_ref)
     parameters["X_rad"]=X
 
 ## Relationship between wind and R_TOP
+# Modify the dictionary par by updating the wind speed
 # To complete from Excel file
 def change_u(par,wind_speed):
     par["u"] = wind_speed
@@ -43,6 +46,7 @@ def change_u(par,wind_speed):
     par["h_top"]=new_h_wind
     par["R_T"]= par["R_TOP"] + 1/par["h_top"]
 
+# return tanh or 1/tanh
 def tanh_or_inverse(arg):
     return math.tanh(arg)
 
@@ -72,116 +76,117 @@ def h_fluid(parameters):
     parameters["h_fluid"] = (k_fluid/D_tube)*Nu_fluid
 
 def C_B(parameters):
-    lambd_riser = parameters["lambd_riser"]
+    lambd_riser_plate = parameters["lambd_riser_plate"]
     l_c = parameters["l_c"]
     k_riser = parameters["k_riser"]
 
-    parameters["C_B"] = (l_c*k_riser)/lambd_riser
+    parameters["C_B"] = (l_c*k_riser)/lambd_riser_plate
 
 def h_top(parameters,var):
     T_PV = var["T_PV"]
     T_amb = parameters["T_amb"]
 
-    h_free = parameters["coeff_h_top"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["L_abs"])
+    h_free = parameters["coeff_h_top_free"]*bht.top_h_simple(T_PV,T_amb,parameters["theta"],parameters["L_abs"])
 
-    h_forced = parameters["b_htop"]+parameters["a_htop"]*parameters["u"]
+    if parameters["orientation"]=="portrait":
+        longueur = parameters["L_pan"]
+    else:
+        longueur = parameters["w_pan"]
+
+    h_forced = parameters["coeff_h_top_forced"]*bht.h_top_forced(T_PV,T_amb,parameters["u"],longueur)
 
     parameters["h_top"] = (h_free**3 + h_forced**3)**(1/3)
 
 
-def h_inner(parameters,var):
+def h_back(parameters,var):
     if var["T_abs_mean"]==None:
-        print('T_abs_mean = None in h_inner()')
+        print('T_abs_mean = None in h_back()')
         return 3.
     elif parameters["fin_0"] >= 1 or parameters["fin_1"] >= 1 or parameters["fin_2"] >= 1:
         if parameters["geometry"]=="harp":
-            D_4 = parameters["D_4"]
-            parameters["h_inner"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D_4,parameters["Heta"])
+            D_4 = parameters["D"]
+            parameters["h_back"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D_4,parameters["Heta"])
 
         else:
             D = parameters["D"]
-            parameters["h_inner"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D,parameters["Heta"])
+            parameters["h_back"] = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D,parameters["Heta"])
     else:
         # theta est l'inclinaison du panneau par rapport à l'horizontale
         T_ref = var["T_abs_mean"]
         if parameters["insulated"] == 1:
             R_2 = parameters["R_2"]
-            h_back = parameters["h_inner"]
+            h_back = parameters["h_back"]
             # T_back = parameters["T_back"]
 
             T_ref = T_ref + (R_2/(R_2+1/h_back))
 
         res = parameters["coeff_h_back"]*bht.back_h_simple(T_ref,parameters["T_back"],parameters["theta"],parameters["longueur"])
+
         if res == None:
-            print('res = None in h_inner()')
+            print('res = None in h_back()')
             print('longueur',parameters["longueur"])
             print('T_abs',var["T_abs_mean"])
             print('theta',parameters["theta"])
             print('T_back',parameters["T_back"])
-            print('h_inner_calculated',res)
-        parameters["h_inner"] = res
+            print('h_back_calculated',res)
+
+        parameters["h_back"] = res
 
 # que pour les géométries avec ailettes (non isolées)
-def h_inner_mean(parameters,var):
+def h_back_mean(parameters,var):
     if parameters["geometry"] == "harp":
-        D_4 = parameters["D_4"]
-        old_h_inner = parameters["h_inner"]
-        new_h_inner = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D_4,parameters["L_a"])
-        if abs(new_h_inner - old_h_inner) > 0.1:
-            parameters["h_inner"] = (old_h_inner+new_h_inner)/2
+        D_4 = parameters["D"]
+        old_h_back = parameters["h_back"]
+        new_h_back = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D_4,parameters["Heta"])
+        if abs(new_h_back - old_h_back) > 0.1:
+            parameters["h_back"] = (old_h_back+new_h_back)/2
         else:
             pass
 
     else:
         D = parameters["D"]
-        old_h_inner = parameters["h_inner"]
+        old_h_back = parameters["h_back"]
         if parameters["N_ail"]<= 24:
-            new_h_inner = parameters["coeff_h_back"]*bht.back_h_simple(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"])
+            new_h_back = parameters["coeff_h_back"]*bht.back_h_simple(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"])
         else:
-            new_h_inner = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D,parameters["Heta"])
-        if abs(new_h_inner - old_h_inner) > 0.1:
-            parameters["h_inner"] = (old_h_inner+new_h_inner)/2
+            new_h_back = parameters["coeff_h_back"]*bht.back_h_fins(var["T_abs_mean"],parameters["T_back"],parameters["theta"],parameters["longueur"],D,parameters["Heta"])
+        if abs(new_h_back - old_h_back) > 0.1:
+            parameters["h_back"] = (old_h_back+new_h_back)/2
         else:
             pass
 
-def Bi_f0(parameters):
-    lambd_ail = parameters["lambd_ail"]
-    k_ail = parameters["k_ail"]
-    h_inner = parameters["h_inner"]
-    delta = parameters["delta_f0"]
+    # parameters["h_back"] = 3. # test sur l'influence du h_back
 
-    res = ((lambd_ail*h_inner)/k_ail)*(1+lambd_ail/delta)
-    parameters["Bi_f0"] = res
+def h_rad_back(parameters, var):
+
+    eps = parameters["eps_he"]
+    sigma = parameters["sigma"]
+    T_back = parameters["T_amb"] # hypothèse T_amb = T_back
+
+    T_abs_mean = var["T_abs_mean"]
+
+    h = eps*sigma*(T_abs_mean+T_back)*(T_abs_mean**2+T_back**2)
+    parameters["h_rad_back"]=h
+
+
+# Pour les ailettes, on ne prend pas en compte la composante radiative h_rad_back
+
+def Biot(lambd,k,h,delta):
+    return ((lambd*h)/k)*(1+lambd/delta)
+
+def Bi_f0(parameters):
+    parameters["Bi_f0"] = Biot(parameters["lambd_ail"],parameters["k_ail"],parameters["h_back"],parameters["delta_f0"])
 
 def Bi_f1(parameters):
-    lambd_ail = parameters["lambd_ail"]
-    k_ail = parameters["k_ail"]
-    h_inner = parameters["h_inner"]
-    delta = parameters["delta_f1"]
-
-    res = ((lambd_ail*h_inner)/k_ail)*(1+lambd_ail/delta)
-    parameters["Bi_f1"] = res
+    parameters["Bi_f1"] = Biot(parameters["lambd_ail"],parameters["k_ail"],parameters["h_back"],parameters["delta_f1"])
 
 def Bi_f2(parameters):
-    lambd_ail = parameters["lambd_ail"]
-    k_ail = parameters["k_ail"]
-    h_inner = parameters["h_inner"]
-    delta = parameters["delta_f2"]
-
-    res = ((lambd_ail*h_inner)/k_ail)*(1+lambd_ail/delta)
-    parameters["Bi_f2"] = res
+    parameters["Bi_f1"] = Biot(parameters["lambd_ail"],parameters["k_ail"],parameters["h_back"],parameters["delta_f2"])
 
 def Bi_f3(parameters):
-    lambd_ail = parameters["lambd_ail"]
-    k_ail = parameters["k_ail"]
-    h_inner = parameters["h_inner"]
-    delta = parameters["delta_f3"]
-
-    res = ((lambd_ail*h_inner)/k_ail)*(1+lambd_ail/delta)
-    parameters["Bi_f3"] = res
+    parameters["Bi_f3"] = Biot(parameters["lambd_ail"],parameters["k_ail"],parameters["h_back"],parameters["delta_f3"])
 
 ##### Variables
-
 
 ## PV production
 
@@ -213,7 +218,7 @@ def X_celltemp(parameters,var):
 def eta_PV(parameters, var):
     
     eta_nom = parameters["eta_nom"]
-    G_T0 = parameters["G_T0"]
+    G = parameters["G"]
     X_rad = parameters["X_rad"]
     X_corr = parameters["X_corr"]
 
@@ -228,12 +233,12 @@ def eta_PV(parameters, var):
 # net absorbed solar radiation (total absorbed - PV power production)
 def S(parameters, var):
     tau_alpha = parameters["tau_alpha"]
-    G_T0 = parameters["G_T0"]
+    G = parameters["G"]
 
     #T_PV = var["T_PV"]
     eta_PV = var["eta_PV"]
 
-    S = tau_alpha*G_T0*(1-eta_PV)
+    S = tau_alpha*G*(1-eta_PV)
 
     var["S"] = S
 
@@ -252,7 +257,7 @@ def gamma(parameters):
     alpha = parameters["alpha_ail"]
     beta = parameters["beta_ail"]
     a = parameters["lambd_ail"]
-    L_a = parameters["L_a"]
+    L_a = parameters["Heta"]
 
     arg = (alpha*L_a)/a
     numerateur = (alpha/a)*math.sinh(arg) + ((beta*alpha)/a)*math.cosh(arg)
@@ -297,8 +302,6 @@ def gamma_1_int(parameters):
 
     L_riser = parameters["L_riser"]
 
-    D_tube = parameters["D_tube"]
-
     gamma = 2*k*((a*N_ail*delta)/L_riser)*math.tanh(math.sqrt(2*Bi)*(L_a/a))*(math.sqrt(2*Bi)/a)
 
     parameters["gamma_1_int"] = parameters["coeff_f1"]*gamma
@@ -331,7 +334,7 @@ def gamma_2_int(parameters):
 
 def j(parameters,var):
     R_INTER = parameters["R_INTER"]
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
 
     Fprime = var["Fp"]
     
@@ -350,7 +353,7 @@ def b(parameters, var):
     T_amb = parameters["T_amb"]
     R_T = parameters["R_TOP"]+1/parameters["h_top"]
     T_back = parameters["T_back"]
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
 
     h_rad = var["h_rad"]
     S = var["S"]
@@ -375,7 +378,7 @@ def m(parameters, var):
 
     m = math.sqrt((Fprime*j)/(k_abs*lambd_abs))
 
-    var["m"] = m
+    var["m"] = m   
 
 # Need the absorber's fin base temperature T_B - function not used
 def qp_fin(parameters, var):
@@ -402,10 +405,13 @@ def KTE(parameters, var):
     L_af = parameters["L_af"]
     D_tube = parameters["D_tube"]
     l_B = parameters["l_B"]
+    l_c = parameters["l_c"]
+    p_int_tube = parameters["p_int_tube"]
+    p_ext_tube = parameters["p_ext_tube"]
 
     R_INTER = parameters["R_INTER"]
     R_T = parameters["R_TOP"]+1/parameters["h_top"]
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
     h_fluid = parameters["h_fluid"]
 
     T_sky = parameters["T_sky"]
@@ -427,11 +433,11 @@ def KTE(parameters, var):
 
     #print(var)
 
-    chi = 1/(h_fluid*math.pi*D_tube)+1/C_B
+    chi = 1/(h_fluid*p_int_tube)+1/C_B
 
-    K = -D_tube*Fprime*((l_B/D_tube)*(h_rad+1/R_T)+(iota/D_tube)/(R_B*Fprime))-2*k_abs*lambd_abs*m*tanh_or_inverse(m*L_af)
-    T = 1+D_tube*Fprime*chi*((l_B/D_tube)*(h_rad+1/R_T)+(iota/D_tube)/(R_B*Fprime))+2*k_abs*lambd_abs*m*tanh_or_inverse(m*L_af)*chi
-    E = D_tube*Fprime*((l_B/D_tube)*(S+h_rad*T_sky+T_amb/R_T)+((iota/D_tube)*T_back)/(R_B*Fprime))+2*k_abs*lambd_abs*m*tanh_or_inverse(m*L_af)*(b/j)
+    K = -D_tube*Fprime*((l_c/D_tube)*(h_rad+1/R_T)+(iota/D_tube)/(R_B*Fprime))-2*k_abs*lambd_abs*m*tanh_or_inverse(m*L_af)
+    T = 1+D_tube*Fprime*chi*((l_c/D_tube)*(h_rad+1/R_T)+(iota/D_tube)/(R_B*Fprime))+2*k_abs*lambd_abs*m*tanh_or_inverse(m*L_af)*chi
+    E = D_tube*Fprime*((l_c/D_tube)*(S+h_rad*T_sky+T_amb/R_T)+((iota/D_tube)*T_back)/(R_B*Fprime))+2*k_abs*lambd_abs*m*tanh_or_inverse(m*L_af)*(b/j)
 
     if parameters["fin_3"]==1:
 
@@ -449,7 +455,7 @@ def KTE(parameters, var):
         #D2=0
         alpha = (2*Bi)**(1/2)
 
-        integ = (math.pi*D_tube*a*N)/2
+        integ = (p_ext_tube*a*N)/2
         A = (-k_ail*alpha*math.cosh(alpha*L_vf/a))/(a*math.sinh(alpha*L_vf/a)) * (integ/L_riser)
 
         chiet = chi-(1/A)
@@ -469,17 +475,20 @@ def ab_f(parameters, var):
     m_dot = parameters["m_dot"]
     C_p = parameters["C_p"]
 
-    R_tube = parameters["lambd_riser"]/parameters["k_riser"]
+    R_tube = parameters["lambd_riser_back"]/parameters["k_riser"]
     R_2 = parameters["R_2"]
-    D_tube = parameters["D_tube"]
+    h_back = 1/(parameters["h_back"]+parameters["h_rad_back"])
+
+    w_tube = parameters["w_tube"]
+    p_int_tube = parameters["p_int_tube"]
+    p_ext_tube = parameters["p_ext_tube"]
 
     T_back = parameters["T_back"]
     
-    h_inner = parameters["h_inner"]
-    if h_inner == None:
-        print("h_inner")
+    if h_back == None:
+        print("h_back")
         print(var["T_abs_mean"])
-        h_inner = 3.
+        h_back = 3.
 
     K = var["Ka"]
     T = var["Th"]
@@ -488,37 +497,31 @@ def ab_f(parameters, var):
     a = (N_harp/(m_dot*C_p))*(K/T)
     b = (N_harp/(m_dot*C_p))*(E/T)
 
-    if parameters["tube_conv"] == 1:
-        a += (-1/(m_dot*C_p))*math.pi*D_tube/(1/h_inner+R_tube+R_2)
-        b += (1/(m_dot*C_p))*math.pi*D_tube*T_back/(1/h_inner+R_tube+R_2)
-    
-    if parameters["fin_0"] == 1 or parameters["fin_1"] == 1:
+    if parameters["fin_0"] == 1:
+        gamma_0_int = parameters["gamma_0_int"]
+    else:
+        gamma_0_int = 0
 
-        if parameters["fin_0"] == 1:
-            gamma_0_int = parameters["gamma_0_int"]
-        else:
-            gamma_0_int = 0
-
-        if parameters["fin_1"] == 1:
-            gamma_1_int = parameters["gamma_1_int"]
-            # print(gamma_1_int)
-        else:
-            gamma_1_int = 0
+    if parameters["fin_1"] == 1:
+        gamma_1_int = parameters["gamma_1_int"]
+        # print(gamma_1_int)
+    else:
+        gamma_1_int = 0
         
 
-        k = parameters["k_ail"]
-        C_B_f = (math.pi*D_tube*parameters["k_riser"])/parameters["lambd_riser"]
-        h_fluid = parameters["h_fluid"]
+    k = parameters["k_ail"]
+    C_B_f = (p_ext_tube*parameters["k_riser"])/parameters["lambd_riser_back"]
+    h_fluid = parameters["h_fluid"]
 
-        chi = 1/(h_fluid*math.pi*D_tube)+1/C_B_f
+    chi = 1/(h_fluid*p_int_tube)+1/C_B_f
 
-        zeta = (gamma_1_int + gamma_0_int)/(1+chi*(gamma_1_int+gamma_0_int))
-        # print(zeta)
+    gamma_back = p_ext_tube/(R_2+1/h_back)
 
-        a += (-1/(m_dot*C_p))*zeta
-        b += (1/(m_dot*C_p))*zeta*T_back
-    else:
-        pass
+    zeta = (gamma_back + gamma_1_int + gamma_0_int)/(1+chi*(gamma_back+gamma_1_int+gamma_0_int))
+    # print(zeta)
+
+    a += (-N_harp/(m_dot*C_p))*zeta
+    b += (N_harp/(m_dot*C_p))*zeta*T_back
 
     parameters["a_f"] = a
     parameters["b_f"] = b
@@ -552,10 +555,10 @@ def T_fluid_mean(parameters,T_fluid_in,var):
 
     L_riser = parameters["L_riser"]
 
-    h_inner = parameters["h_inner"]
-    if h_inner == None:
+    h_back = parameters["h_back"]
+    if h_back == None:
         print(var["T_abs_mean"])
-        h_inner = 3.
+        h_back = 3.
 
     a = parameters["a_f"]
     b = parameters["b_f"]
@@ -567,13 +570,13 @@ def T_fluid_mean(parameters,T_fluid_in,var):
 def T_Base_mean(parameters, var): #T_fluid has already been used for q_f_p and T_f_mean calculations
 
     h_fluid = parameters["h_fluid"]
-    D_tube = parameters["D_tube"]
     C_B = parameters["C_B"]
+    p_int_tube = parameters["p_int_tube"]
 
     q_f_p = var["qp_fluid"]
     T_f_mean = var["T_fluid_mean"]
 
-    res = (1/(h_fluid*math.pi*D_tube)+1/C_B)*q_f_p + T_f_mean
+    res = (1/(h_fluid*p_int_tube)+1/C_B)*q_f_p + T_f_mean
     var["T_Base_mean"] = res
 
 # Eq. 560.42 -> calculate the mean fin temperature
@@ -582,12 +585,11 @@ def T_fin_mean(parameters,var):
     lambd_abs = parameters["lambd_abs"]
     k_abs = parameters["k_abs"]
     W = parameters["W"]
-    D_tube = parameters["D_tube"]
 
     L_af = parameters["L_af"]
 
     R_T = parameters["R_TOP"] + 1/parameters["h_top"]
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
     h_fluid = parameters["h_fluid"]
 
     T_sky = parameters["T_sky"]
@@ -616,7 +618,6 @@ def T_abs_mean(parameters,var):
     W = parameters["W"]
     l_B = parameters["l_B"]
     L_af = parameters["L_af"]
-    D_tube = parameters["D_tube"]
 
     T_Base_mean = var["T_Base_mean"]
     T_fin_mean = var["T_fin_mean"]
@@ -720,37 +721,43 @@ def Q_PV_Base(parameters,var):
 def qp_PV_Base(parameters,var):
 
     R_INTER = parameters["R_INTER"]
-    D_tube = parameters["D_tube"]
+    l_c = parameters["l_c"]
 
     T_PV_m = var["T_PV"]
     T_Base_m = var["T_Base_mean"]
     L = parameters["L_riser"]
 
-    var["qp_PV_Base"] = D_tube*((T_PV_m-T_Base_m)/R_INTER)
+    var["qp_PV_Base"] = l_c*((T_PV_m-T_Base_m)/R_INTER)
 
-def Q_abs_back(parameters,var):
+def Q_abs_back1(parameters,var):
 
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
     L_af = parameters["L_af"]
 
     T_abs_m = var["T_abs_mean"]
     T_back = parameters["T_back"]
     L = parameters["L_riser"]
 
-    var["Q_abs_back"] = L*L_af*(T_abs_m-T_back)/R_B
+    var["Q_abs_back1"] = L*L_af*(T_abs_m-T_back)/R_B
 
 def Q_fluid(parameters,var):
 
     h_fluid = parameters["h_fluid"]
-    D_tube = parameters["D_tube"]
+    p_int_tube = parameters["p_int_tube"]
     C_B = parameters["C_B"]
-    chi = 1/(h_fluid*math.pi*D_tube)+1/C_B
+    chi = 1/(h_fluid*p_int_tube)+1/C_B
 
     T_Base_m = var["T_Base_mean"]
     T_fluid_m = var["T_fluid_mean"]
     L = parameters["L_riser"]
 
     var["Q_fluid1"]=(L/chi)*(T_Base_m-T_fluid_m)
+
+    coeff_c_p = [4.2184,-0.0028218,0.000073478,-9.4712e-7,7.2869e-9,-2.8098e-11,4.4008e-14]
+    coeff_c_p = list(reversed(coeff_c_p))
+
+    T_m_C = (var["T_fluid_in"]+var["T_fluid_out"])/2 - 273.15
+    parameters["C_p"] = np.polyval(coeff_c_p,T_m_C)*1000
 
     N_harp = parameters["N_harp"]
     L = parameters["L_riser"]
@@ -764,7 +771,7 @@ def Q_fluid(parameters,var):
 
 def Q_Base_back(parameters,var):
 
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
     iota = parameters["iota"]
 
     T_Base_m = var["T_Base_mean"]
@@ -776,7 +783,7 @@ def Q_Base_back(parameters,var):
 
 def qp_Base_back(parameters,var):
 
-    R_B = parameters["R_2"] + 1/parameters["h_inner"]
+    R_B = parameters["R_2"] + 1/(parameters["h_back"]+parameters["h_rad_back"])
     iota = parameters["iota"]
 
     T_Base_m = var["T_Base_mean"]
@@ -792,6 +799,9 @@ def Q_absfins_Base(parameters,var):
 
     var["Q_absfins_Base"] = 2*L*q
 
+def Q_abs_back2(parameters,var):
+    var["Q_abs_back2"] = var["Q_absfins_Base"] - var["Q_PV_plate"] + var["Q_PV_Base"]
+
 def power_balance_3(parameters,var):
     Q_PV_Base = var["Q_PV_Base"]
     Q_absfins_Base = var["Q_absfins_Base"]
@@ -806,31 +816,41 @@ def PB_3(parameters,var):
     var["PB_3"] = PB3
     # print(PB3)
 
-def qp_fluid_back(parameters,var):
-
-    T_fluid_m = var["T_fluid_mean"]
-    T_back = parameters["T_back"]
-
-    D_tube = parameters["D_tube"]
-    R_tube = parameters["lambd_riser"]/parameters["k_riser"]
-    R_2 = parameters["R_2"]
-    h_inner = parameters["h_inner"]
-
-    var["qp_fluid_back"] = (math.pi*D_tube/(1/h_inner+R_tube+R_2))*(T_fluid_m-T_back)
-
 def Q_fluid_back(parameters,var):
 
-    T_fluid_m = var["T_fluid_mean"]
-    T_back = parameters["T_back"]
+    p_ext_tube = parameters["p_ext_tube"]
+    R_2 = parameters["R_2"]
+    h_back = parameters["h_back"]+parameters["h_rad_back"]
+
+    k = parameters["k_ail"]
+    C_B_f = (p_ext_tube*parameters["k_riser"])/parameters["lambd_riser_back"]
+    h_fluid = parameters["h_fluid"]
+    p_int_tube = parameters["p_int_tube"]
+
+    chi = 1/(h_fluid*p_int_tube)+1/C_B_f
 
     L = parameters["L_riser"]
 
-    D_tube = parameters["D_tube"]
-    R_tube = parameters["lambd_riser"]/parameters["k_riser"]
-    R_2 = parameters["R_2"]
-    h_inner = parameters["h_inner"]
+    if parameters["fin_0"]==1:
+        gamma_0_int = parameters["gamma_0_int"]
+    else:
+        gamma_0_int = 0
+    if parameters["fin_1"]==1:
+        gamma_1_int = parameters["gamma_1_int"]
+    else:
+        gamma_1_int = 0
 
-    var["Q_fluid_back"] = L*(math.pi*D_tube/(1/h_inner+R_tube+R_2))*(T_fluid_m-T_back)
+    R_2 = parameters["R_2"]
+    h_back = parameters["h_back"]+parameters["h_rad_back"]
+    gamma_back = p_ext_tube/(R_2+1/h_back)
+
+    T_fluid_m = var["T_fluid_mean"]
+    T_back = parameters["T_back"]
+
+    zeta = (gamma_back)/(1+chi*(gamma_back+gamma_1_int+gamma_0_int))
+
+    var["Q_fluid_back"] = L*zeta*(T_fluid_m-T_back)
+
 
 def qp_f0(parameters,var):
 
@@ -840,6 +860,43 @@ def qp_f0(parameters,var):
     gamma_0_int = parameters["gamma_0_int"]
 
     var["qp_f0"] = gamma_0_int*(T_fluid_m-T_back)
+
+def Q_f01(parameters,var):
+
+    h_fluid = parameters["h_fluid"]
+    p_int_tube = parameters["p_int_tube"]
+    p_ext_tube = parameters["p_ext_tube"]
+
+    k = parameters["k_ail"]
+    C_B_f = (p_ext_tube*parameters["k_riser"])/parameters["lambd_riser_back"]
+
+
+    chi = 1/(h_fluid*p_int_tube)+1/C_B_f
+
+    L = parameters["L_riser"]
+
+    if parameters["fin_0"]==1:
+        gamma_0_int = parameters["gamma_0_int"]
+    else:
+        gamma_0_int = 0
+    if parameters["fin_1"]==1:
+        gamma_1_int = parameters["gamma_1_int"]
+    else:
+        gamma_1_int = 0
+
+    R_2 = parameters["R_2"]
+    h_back = parameters["h_back"]+parameters["h_rad_back"]
+    gamma_back = p_ext_tube/(R_2+1/h_back)
+
+    zeta = (gamma_1_int + gamma_0_int)/(1+chi*(gamma_back+gamma_1_int+gamma_0_int))
+    
+    T_fluid_m = var["T_fluid_mean"]
+    T_back = parameters["T_back"]
+
+    Q = L*zeta*(T_fluid_m-T_back)
+
+    var["Q_f01"] = Q
+
 
 def qp_f1(parameters,var):
 
@@ -858,6 +915,10 @@ def qp_f2(parameters,var):
     gamma_2_int = parameters["gamma_2_int"]
 
     var["qp_f2"] = gamma_2_int*(T_abs_m-T_back)
+
+def Q_f2(parameters,var):
+
+    var["Q_f2"] = var["qp_f2"] * parameters["L_riser"]
 
 def one_loop(parameters,T_fluid_in,var):
 
@@ -897,9 +958,9 @@ def one_loop(parameters,T_fluid_in,var):
     T_abs_mean(parameters,var)
 
     if parameters["fin_0"] == 1 or parameters["fin_1"] == 1 or parameters["fin_2"] == 1:
-        h_inner_mean(parameters,var)
+        h_back_mean(parameters,var)
     else:
-        h_inner(parameters,var)
+        h_back(parameters,var)
 
     T_PV_mean(parameters,var)
     T_PV_meanB(parameters,var)
@@ -910,136 +971,264 @@ def one_loop(parameters,T_fluid_in,var):
 
     h_top(parameters,var)
 
+
+def compute_power(parameters,var):
+    Q_top_conv(parameters,var)
+    Q_top_rad(parameters,var)
+    Q_PV_plate(parameters,var)
+    Q_abs_back1(parameters,var)
+    Q_PV_Base(parameters,var)
+    Q_Base_back(parameters,var)
+    Q_fluid(parameters,var)
+    # qp_fluid_back(parameters,var)
+    qp_fin(parameters,var)
+    Q_absfins_Base(parameters,var)
+    Q_abs_back2(parameters,var)
+    Q_fluid_back(parameters,var)
+
+    if parameters["fin_0"]==1 or parameters["fin_1"]==1:
+        Q_f01(parameters,var)
+
+    power_balance_1(parameters,var)
+    power_balance_3(parameters,var)
+
+    if parameters["fin_0"] == 1:
+        qp_f0(parameters,var)
+    if parameters["fin_1"] == 1:
+        qp_f1(parameters,var)
+    if parameters["fin_2"] == 1:
+        pass
+
 # parameters and var are dictionnaries
 # Division of the panel in N rectangles (N=16)
-def simu_one_steady_state(parameters,var,N,T_fluid_in,guess_T_PV,res):
-    var["T_PV0"] = 0
-    var["T_PV"] = guess_T_PV
+def simu_one_steady_state(parameters,T_fluid_in0,guess_T_PV):
 
     list_T_PV = [guess_T_PV]
-    list_T_abs = []
-    list_h = []
-    list_T_f_out = [T_fluid_in]
-    list_var = []
+    list_T_f_out = [T_fluid_in0]
 
     list_var_conv = []
 
+    N=parameters["N_meander"]
+
+    list_df_historic = [] # liste de N df correspondant aux historiques de convergence pour chaque tranche de panneau
+    df = pd.DataFrame()
+
     for i in range(N):
+        var = {}
+
         new_guess_T_PV = list_T_PV[i]
         var["T_PV0"] = 0
         var["T_PV"] = new_guess_T_PV
-        
-        T_f_in = list_T_f_out[i]
 
+        var['Slice'] = i
+
+        T_f_in = list_T_f_out[i]
+        var['T_fluid_in'] = T_f_in
+        
         # print('boucle ',i)
         compt = 0
         while compt<= 2 or abs(var["T_PV"]-var["T_PV0"])>=0.001:
         # while compt<= 2 or abs(var["PB_3"])>=0.01:
             compt+=1
             one_loop(parameters,T_f_in,var)
-            # print(var["Q_PV_Base"]+2*var["qp_fin"])
-            # print(var["qp_fluid"]+var["Q_Base_back"])
 
-            Q_top_conv(parameters,var)
-            Q_top_rad(parameters,var)
-            Q_PV_plate(parameters,var)
-            Q_abs_back(parameters,var)
-            Q_PV_Base(parameters,var)
-            Q_Base_back(parameters,var)
-            Q_fluid(parameters,var)
-            # qp_fluid_back(parameters,var)
-            qp_fin(parameters,var)
-            Q_absfins_Base(parameters,var)
-            Q_fluid_back(parameters,var)
-            power_balance_1(parameters,var)
-            power_balance_3(parameters,var)
+            compute_power(parameters,var)
 
-            if parameters["fin_0"] == 1:
-                qp_f0(parameters,var)
-            if parameters["fin_1"] == 1:
-                qp_f1(parameters,var)
-            if parameters["fin_2"] == 1:
-                pass
-
-            if res=="all":
-                numero = {'Slice' : i, 'T_fluid_in' : parameters["T_fluid_in0"]}
-                var_copy = copy.deepcopy(var)
-                to_add = {**numero, **var_copy}
-                list_var_conv.append(to_add)
+            par_var = {'m_dot' : parameters['m_dot'],'G':parameters['G'],'Gp':parameters['Gp'],'T_amb':parameters['T_amb'],'u':parameters['u'],'h_top' : parameters['h_top'], 'h_back' : parameters['h_back'], 'h_rad_back' : parameters["h_radh_back"],'h_fluid' : parameters['h_fluid']}
+            var_copy = copy.deepcopy(var)
+            to_add_conv = {**par_var, **var_copy}
+            list_var_conv.append(to_add_conv)
 
         one_loop(parameters,T_f_in,var)
         #break
         # T_PV_27(parameters,var)
         
-        Q_top_conv(parameters,var)
-        Q_top_rad(parameters,var)
-        Q_PV_plate(parameters,var)
-        Q_abs_back(parameters,var)
-        Q_PV_Base(parameters,var)
-        Q_Base_back(parameters,var)
-        Q_fluid(parameters,var)
-        # qp_fluid_back(parameters,var)
-        qp_fin(parameters,var)
-        Q_absfins_Base(parameters,var)
-        Q_fluid_back(parameters,var)
-        power_balance_1(parameters,var)
-        power_balance_3(parameters,var)
+        compute_power(parameters,var)
 
-        if parameters["fin_0"] == 1:
-            qp_f0(parameters,var)
-        if parameters["fin_1"] == 1:
-            qp_f1(parameters,var)
-        if parameters["fin_2"] == 1:
-            pass
+        par_var = {'m_dot' : parameters['m_dot'],'G':parameters['G'],'Gp':parameters['Gp'],'T_amb':parameters['T_amb'],'u':parameters['u'],'h_top' : parameters['h_top'], 'h_back' : parameters['h_back'], 'h_rad_back' : parameters["h_radh_back"], 'h_fluid' : parameters['h_fluid']}
+        var_copy = copy.deepcopy(var)
+        to_add = {**par_var, **var_copy}
 
+        df_to_add = pd.DataFrame.from_dict({'row' : to_add.values()},orient='index',columns=to_add.keys())
+        df = pd.concat([df,df_to_add])
 
         list_T_PV.append(var["T_PV"])
-        list_T_abs.append(var["T_abs_mean"])
-        list_h.append(parameters["h_inner"])
         list_T_f_out.append(var["T_fluid_out"])
 
-        if res=="all":
-        #    print(var)
-            par = {'T_fluid_in' : parameters["T_fluid_in0"]}
-            var_copy = copy.deepcopy(var)
-            to_add = {**par, **var_copy}
-            list_var.append(to_add)
+        list_df_historic.append(pd.DataFrame(list_var_conv))    
 
-    #print(list_T_PV)
-    #print(list_T_f_out)
+    df_mean = df.mean()
+    df_sum = df.sum()
 
-    T_abs_meanx = np.mean(list_T_abs)
-    h_back_mean = np.mean(list_h)
+    df_one = pd.DataFrame()
 
-    if res=="T_f_out":
-        return list_T_f_out[N],T_abs_meanx,h_back_mean
-    elif res=="all":
-        return list_var,list_var_conv
+    for str in df.keys():
+        if str in ['m_dot','G','Gp','T_amb','u']:
+            df_one[str] = [parameters[str]]
+        elif str == "T_fluid_in":
+            df_one[str] = [T_fluid_in0]
+        elif str == "T_fluid_out":
+            df_one[str] = [list_T_f_out[N]]
+        elif str in ["T_fluid_mean","T_PV","T_abs_mean","T_Base_mean","T_fin_mean","T_abs_mean","T_PV_meanB","h_rad","h_top","h_back","h_fluid","X_celltemp","eta_PV","S"]:
+            df_one[str] = [df_mean[str]]
+        elif str in ["qp_fluid","qp_PV_Base","qp_Base_back","qp_fin","Q_top_conv","Q_top_rad","Q_PV_plate","Q_abs_back","Q_PV_Base","Q_Base_back","Q_fluid1","Q_fluid2","Q_absfins_Base","Q_fluid_back","Q_f01","qp_f0","qp_f1","qp_f2"]:
+            df_one[str] = [df_sum[str]]
 
-# Test une liste de températures du fluide en entrée
-def simu_steady_states_for_Tfluidin_list(parameters,T_fluid_in_list,T_guess):
-    
-    N=parameters["N_meander"]
+    return df,df_one,list_df_historic
 
-    T_fluid_out_list = []    
-    T_abs_list = []
-    h_back_list = []
+def pos(x):
+    if x>=0:
+        return x
+    else:
+        return 0
 
-    for i in range(len(T_fluid_in_list)):
+def neg(x):
+    if x<=0:
+        return x
+    else:
+        return 0
 
-        # print('T_fluid_in ',i)
+def pos_df(df,col_name):
+    l = []
+    for x in df[col_name]:
+        l.append(pos(x))
+    return l
 
-        var = {}
-        T_f_in = T_fluid_in_list[i]
-        T_f_out,T_abs_meanx,h_back = simu_one_steady_state(parameters,var,N,T_f_in,T_guess,"T_f_out")
+def neg_df(df,col_name):
+    l = []
+    for x in df[col_name]:
+        l.append(neg(x))
+    return l   
 
-        T_fluid_out_list.append(T_f_out)
-        T_abs_list.append(T_abs_meanx)
-        h_back_list.append(h_back)
-
-    return T_fluid_out_list,T_abs_list,h_back_list
 
 def simu_condi(par,condi_df):
+    
+    # Dataframe object
+    df_res = pd.DataFrame()
+
+    sigma = par["sigma"]
+
+    compt_test = 0
+
+    list_df = []
+    list_list_df_historic = []
+
+    for i in range(1,len(condi_df)+1):
+
+        par["G"]=condi_df["G"][i]
+        par["T_amb"]=condi_df["ta"][i]+273.15
+        change_T_sky(par,'TUV')
+        # Back temperature = ambiant temperature
+        par["T_back"]=par["T_amb"]
+        # Change wind_speed in parameters and adapt R_T
+        change_u(par,condi_df["U"][i])
+        par["m_dot"] = condi_df["mdot"][i]
+        
+        T_guess = (par["T_amb"]+condi_df["tin"][i]+273.15)/2
+
+        df,df_one,list_df_historic = simu_one_steady_state(par,condi_df["tin"][i]+273.15,T_guess)
+
+        df_res = pd.concat([df_res,df_one],ignore_index=True)
+        list_df.append(df)
+        list_list_df_historic.append(list_df_historic)
+
+        compt_test+=1
+
+    df_par = pd.DataFrame.from_dict(par, orient='index')
+
+    # Analysing df
+
+    # Be careful here you have zeros for some columns
+
+    tab = pd.DataFrame()
+
+    df_res['DT'] = df_res['T_fluid_out'] - df_res['T_fluid_in']
+    df_res['T_m'] = (df_res['T_fluid_out'] + df_res['T_fluid_in'])/2
+    df_res['T_m en °C'] = df_res['T_m']-273.15
+
+    tab['G'] = df_res['G'] # a0
+    tab['-(T_m - T_a)'] = -(df_res['T_m'] - df_res['T_amb']) # a1
+    # tab['-(T_m - T_a)^2'] = -(df_res['T_m'] - df_res['T_amb'])**2 # a2
+    tab['-(T_m - T_a)^2'] = 0.*df_res['T_m'] # a2
+    tab['-up x (T_m - T_a)'] = (df_res['u'] - 3) * tab['-(T_m - T_a)'] # a3
+    # tab['Gp'] = df_res['Gp'] # a4
+    tab['Gp'] = 0. * df_res['Gp'] # a4
+    tab['up x G'] = -(df_res['u'] - 3) * df_res['G'] # a6
+    tab['up x Gp'] = -(df_res['u'] - 3) * df_res["Gp"] # a7
+    tab['-(T_m - T_a)^4'] = -tab['-(T_m - T_a)']**4 # a8
+
+    # coeff_density = [999.85,0.05332,-0.007564,0.00004323,-1.673e-7,2.447e-10]
+    # coeff_density = list(reversed(coeff_density))
+
+    coeff_c_p = [4.2184,-0.0028218,0.000073478,-9.4712e-7,7.2869e-9,-2.8098e-11,4.4008e-14]
+    coeff_c_p = list(reversed(coeff_c_p))
+
+    # df_res['density(T)'] = np.polyval(coeff_density,df_res['T_m en °C'])
+    df_res['c_p(T)'] = np.polyval(coeff_c_p,df_res['T_m en °C'])*1000
+
+    # df_res['m_dot'] = df_res['density(T)']*(par["m_dot"]/1000)
+
+    df_res['Q_dot'] = df_res['m_dot']*df_res['c_p(T)']*df_res['DT']
+    df_res['Q_dot / A_G'] = df_res['Q_dot']/(par['A_G'])
+
+    matrice = tab.to_numpy()
+    B = df_res['Q_dot / A_G'].to_numpy()
+
+    X = np.linalg.lstsq(matrice, B, rcond = -1)
+
+    #_ = plt.plot(df['T_m*'].to_numpy(), B, 'o', label='Original data', markersize=2)
+    #_ = plt.plot(df['T_m*'].to_numpy(), np.dot(matrice,X[0]), 'o', label='Fitted line',markersize=2)
+    #_ = plt.legend()
+    #plt.show()
+
+    df_res_to_concat = df_res.drop(columns=["G","Gp"])
+
+    df_res = pd.concat([tab,df_res_to_concat],axis=1)
+
+    return df_par,df_res,X,list_df,list_df_historic
+
+def find_a_i(df,par):
+    tab = pd.DataFrame()
+
+    df['DT'] = df['T_fluid_out'] - df['T_fluid_in']
+    df['T_m'] = (df['T_fluid_out'] + df['T_fluid_in'])/2
+
+    df['T_m en °C'] = df['T_m']-273.15
+
+    tab['G'] = df['G'] # a0
+    tab['-(T_m - T_a)'] = -(df['T_m'] - df['T_amb']) # a1
+    # tab['-(T_m - T_a)^2'] = -(df['T_m'] - df['T_amb'])**2 # a2
+    tab['-(T_m - T_a)^2'] = 0.*df['T_m'] # a2
+    tab['-up x (T_m - T_a)'] = (df['u'] - 3) * tab['-(T_m - T_a)'] # a3
+    # tab['Gp'] = df['Gp'] # a4
+    tab['Gp'] = 0. * df['Gp'] # a4
+    tab['dT/dt'] = 0. * df['Gp'] # a5 = 0
+    tab['up x G'] = -(df['u'] - 3) * df['G'] # a6
+    tab['up x Gp'] = -(df['u'] - 3) * df["Gp"] # a7
+    tab['-(T_m - T_a)^4'] = -tab['-(T_m - T_a)']**4 # a8
+
+    # coeff_density = [999.85,0.05332,-0.007564,0.00004323,-1.673e-7,2.447e-10]
+    # coeff_density = list(reversed(coeff_density))
+
+    coeff_c_p = [4.2184,-0.0028218,0.000073478,-9.4712e-7,7.2869e-9,-2.8098e-11,4.4008e-14]
+    coeff_c_p = list(reversed(coeff_c_p))
+
+    # df['density(T)'] = np.polyval(coeff_density,df['T_m en °C'])
+    df['c_p(T)'] = np.polyval(coeff_c_p,df['T_m en °C'])*1000
+
+    # df['m_dot'] = df['density(T)']*(par["m_dot"]/1000)
+
+    df['Q_dot'] = df['m_dot']*df['c_p(T)']*df['DT']
+    df['Q_dot / A_G'] = df['Q_dot']/(par['A_G'])
+
+    matrice = tab.to_numpy()
+    B = df['Q_dot / A_G'].to_numpy()
+
+    X = np.linalg.lstsq(matrice, B, rcond = -1)
+
+    return X
+
+def simu_condi_mpe(par,condi_df,l,h_back,L):
     
     variables = ['N_test','T_guess','G', 'Gp', 'T_amb', 'u', 'T_abs','T_fluid_in', 'T_fluid_out']
     
@@ -1052,7 +1241,7 @@ def simu_condi(par,condi_df):
 
     for i in range(1,len(condi_df)+1):
 
-        par["G_T0"]=condi_df["G"][i]
+        par["G"]=condi_df["G"][i]
 
         # T_amb = T_back
         par["T_amb"]=condi_df["ta"][i]+273.15
@@ -1068,13 +1257,16 @@ def simu_condi(par,condi_df):
         par["m_dot"] = condi_df["mdot"][i]
 
         T_f_in_list = [condi_df["tin"][i]+273.15]                
-        T_guess = (par["T_amb"]+T_f_in_list[0])/2
 
-        T_f_out_list,T_abs_list,h_back_list = simu_steady_states_for_Tfluidin_list(par,T_f_in_list,T_guess)
+        T_f_out = par["T_back"] + (T_f_in_list[0]-par["T_back"])*math.exp(-(l*h_back*L)/((par["m_dot"]/par["N_harp_actual"])*par["C_p"]))
         
         # len(T_f_out_list) = 1
 
-        df = df.append({'N_test' : compt_test, 'T_guess' : T_guess, 'G' : par["G_T0"], 'Gp' : par["G_p"], 'T_amb' : par["T_amb"], 'h_back' : h_back_list[0], 'u' : par["u"], 'T_fluid_in' : T_f_in_list[0], 'T_abs' : T_abs_list[0],'T_fluid_out' : T_f_out_list[0]}, ignore_index=True)
+        to_add = {'N_test' : compt_test, 'T_guess' : 293.15, 'G' : par["G"], 'Gp' : par["Gp"], 'T_amb' : par["T_amb"], 'h_back' : h_back, 'u' : par["u"], 'T_fluid_in' : T_f_in_list[0], 'T_abs' : 293.15,'T_fluid_out' : T_f_out}
+
+        df_to_add = pd.DataFrame.from_dict({'row' : to_add.values()},orient='index',columns=to_add.keys())
+
+        df = pd.concat([df,df_to_add])
 
         compt_test+=1
 
@@ -1126,103 +1318,107 @@ def simu_condi(par,condi_df):
 
     return df_par,df,X
 
-def simu_multi_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,T_f_in_list):
-
-    variables = ['N_test','T_guess','G', 'Gp', 'T_amb', 'u', 'T_abs','T_fluid_in', 'T_fluid_out']
+def simu_condi_mpe_big(par,condi_df,l,L,h_back_top,h_back_bottom,N_harp):
+    
+    variables = ['N_test', 'm_dot', 'T_guess','G', 'Gp', 'T_amb', 'u', 'T_abs','T_fluid_in', 'T_fluid_out']
+    
     # Dataframe object
-    df = pd.DataFrame(columns = variables)
+    df_res = pd.DataFrame(columns = variables)
 
     sigma = par["sigma"]
 
     compt_test = 0
 
-    for i in range(len(G_list)):
-        par["G_T0"]=G_list[i]
-        for j in range(len(coeff_G_p_list)):
-            par["coeff_G_p"]=coeff_G_p_list[j]
-            for r in range(len(T_amb_list)):
-                # T_amb = T_back
-                par["T_amb"]=T_amb_list[r]
-                
-                # Sky temperature is adjusted according to ambiant temperature
-                
-                change_T_sky(par,'outdoor')
+    for i in range(1,len(condi_df)+1):
 
-                # Back temperature = ambiant temperature
-                par["T_back"]=T_amb_list[r]
+        par["G"]=condi_df["G"][i]
 
-                for k in range(len(u_list)):
-                    # Change wind_speed in parameters and adapt R_T
-                    change_u(par,u_list[k])
+        # T_amb = T_back
+        par["T_amb"]=condi_df["ta"][i]+273.15
 
-                    for s in range(len(T_guess_list)):
-                        
-                        T_f_out_list,T_abs_list,h_back_list = simu_steady_states_for_Tfluidin_list(par,T_f_in_list,T_guess_list[s])
+        change_T_sky(par,'TUV')
 
-                        for l in range(len(T_f_out_list)):
-                            
-                            df = df.append({'N_test' : compt_test, 'T_guess' : T_guess_list[s], 'G' : par["G_T0"], 'Gp' : par["G_p"], 'T_amb' : par["T_amb"], 'h_back' : h_back_list[l], 'u' : par["u"], 'T_fluid_in' : T_f_in_list[l], 'T_abs' : T_abs_list[l],'T_fluid_out' : T_f_out_list[l]}, ignore_index=True)
+        # Back temperature = ambiant temperature
+        par["T_back"]=par["T_amb"]
 
-                            #df = df.append({'N_test' : compt_test, 'T_guess' : T_guess_list[s], 'G' : par["G_T0"], 'Gp' : par["G_p"], 'T_amb' : par["T_amb"], 'u' : par["u"], 'T_fluid_in' : T_f_in_list[l], 'T_abs' : T_abs_list[l],'T_fluid_out' : T_f_out_list[l]}, ignore_index=True)
-                            compt_test+=1
-                        
-                        #compt += len(T_f_out_list)
-                compt_test+=1
-            compt_test+=1
+        # Change wind_speed in parameters and adapt R_T
+        change_u(par,condi_df["U"][i])
+
+        par["m_dot"] = condi_df["mdot"][i]
+
+        T_f_in_list = [condi_df["tin"][i]+273.15]                
+
+        T_f_out = par["T_back"] + (T_f_in_list[0]-par["T_back"])*math.exp(-(l*L*h_back_top+l*L*h_back_bottom)/((par["m_dot"]/N_harp)*par["C_p"]))
+        
+        # len(T_f_out_list) = 1
+
+        to_add = {'N_test' : compt_test, 'm_dot' : par["m_dot"], 'T_guess' : 293.15, 'G' : par["G"], 'Gp' : par["Gp"], 'T_amb' : par["T_amb"], 'h_back' : h_back_top, 'u' : par["u"], 'T_fluid_in' : T_f_in_list[0], 'T_abs' : 293.15,'T_fluid_out' : T_f_out}
+
+        df_to_add = pd.DataFrame.from_dict({'row' : to_add.values()},orient='index',columns=to_add.keys())
+
+        df_res = pd.concat([df_res,df_to_add])
+
         compt_test+=1
-    compt_test+=1
 
     df_par = pd.DataFrame.from_dict(par, orient='index')
 
     # Analysing df
 
-    df['DT'] = df['T_fluid_out'] - df['T_fluid_in']
-    df['T_m'] = (df['T_fluid_out'] + df['T_fluid_in'])/2
-    df['T_m*'] = (df['T_m'] - df['T_amb'])/df['G']
-    df['G x (T_m*)^2'] = df['G'] * df['T_m*']**2 * 0
-    df['up x T_m*'] = (df['u'] - 3) * df['T_m*']
-    df['Gp/G'] = df['Gp']/df['G']
-    df['up'] = df['u'] - 3
-    df['up x Gp/G'] = (df['up'] * df['Gp'])/df['G']
-    df['G^3 x (T_m*)^4'] = df['G']**3 * df['T_m*']**4 * 0
+    # Be careful here you have zeros for some columns
 
+    tab = pd.DataFrame()
 
-    df['T_m en °C'] = df['T_m']-273.15
+    df_res['DT'] = df_res['T_fluid_out'] - df_res['T_fluid_in']
+    df_res['T_m'] = (df_res['T_fluid_out'] + df_res['T_fluid_in'])/2
+    df_res['T_m en °C'] = df_res['T_m']-273.15
 
-    coeff_density = [999.85,0.05332,-0.007564,0.00004323,-1.673e-7,2.447e-10]
-    coeff_density = list(reversed(coeff_density))
+    # tab['G'] = 0. * df_res['G'] # a0
+    tab['-(T_m - T_a)'] = -(df_res['T_m'] - df_res['T_amb']) # a1
+    # tab['-(T_m - T_a)^2'] = -(df_res['T_m'] - df_res['T_amb'])**2 # a2
+    # tab['-(T_m - T_a)^2'] = 0.*df_res['T_m'] # a2
+    # tab['-up x (T_m - T_a)'] = (df_res['u'] - 3) * tab['-(T_m - T_a)'] # a3
+    # tab['Gp'] = df_res['Gp'] # a4
+    # tab['Gp'] = 0. * df_res['Gp'] # a4
+    # tab['up x G'] = -(df_res['u'] - 3) * df_res['G'] # a6
+    # tab['up x Gp'] = -(df_res['u'] - 3) * df_res["Gp"] # a7
+    # tab['-(T_m - T_a)^4'] = 0. * (-tab['-(T_m - T_a)']**4) # a8
+
+    # coeff_density = [999.85,0.05332,-0.007564,0.00004323,-1.673e-7,2.447e-10]
+    # coeff_density = list(reversed(coeff_density))
 
     coeff_c_p = [4.2184,-0.0028218,0.000073478,-9.4712e-7,7.2869e-9,-2.8098e-11,4.4008e-14]
     coeff_c_p = list(reversed(coeff_c_p))
 
-    df['density(T)'] = np.polyval(coeff_density,df['T_m en °C'])
-    df['c_p(T)'] = np.polyval(coeff_c_p,df['T_m en °C'])*1000
+    # df_res['density(T)'] = np.polyval(coeff_density,df_res['T_m en °C'])
+    df_res['c_p(T)'] = np.polyval(coeff_c_p,df_res['T_m en °C'])*1000
 
-    df['m_dot'] = df['density(T)']*(par["m_dot"]/1000)
+    # df_res['m_dot'] = df_res['density(T)']*(par["m_dot"]/1000)
 
-    df['Q_dot'] = df['m_dot']*df['c_p(T)']*df['DT']
-    df['Q_dot / (A_G x G)'] = df['Q_dot']/(par['A_G']*df['G'])
+    df_res['Q_dot'] = df_res['m_dot']*df_res['c_p(T)']*df_res['DT']
+    df_res['Q_dot / A_G'] = df_res['Q_dot']/(par['A_G'])
 
-    ones = pd.DataFrame(np.ones(len(df['T_m*'])),columns=['Ones'])
-    ones_column = ones["Ones"]
-    df_mat = df[['T_m*','G x (T_m*)^2','up x T_m*','Gp/G','up','up x Gp/G','G^3 x (T_m*)^4']].join(ones_column)
+    tab = tab.astype('float64')
 
-    matrice = df_mat.to_numpy()
-    B = df['Q_dot / (A_G x G)'].to_numpy()
+    matrice = tab.to_numpy()
+    B = df_res['Q_dot / A_G'].to_numpy()
 
-    X=np.linalg.lstsq(matrice, B, rcond = -1)
+    X = np.linalg.lstsq(matrice, B, rcond = -1)
 
     #_ = plt.plot(df['T_m*'].to_numpy(), B, 'o', label='Original data', markersize=2)
     #_ = plt.plot(df['T_m*'].to_numpy(), np.dot(matrice,X[0]), 'o', label='Fitted line',markersize=2)
     #_ = plt.legend()
     #plt.show()
 
-    return df_par,df,X
+    df_res_to_concat = df_res.drop(columns=["G","Gp"])
+
+    df_res = pd.concat([tab,df_res_to_concat],axis=1)
+
+    return df_par,df_res,X
 
 
 # def q_tot_persqm(parameters,T_abs):
 #     var = {'T_abs_mean':T_abs}
-#     h_inner(parameters,var) # this function uses T_back 
+#     h_back(parameters,var) # this function uses T_back 
 #     ail_biot(parameters)
 #     alpha_ail(parameters)
 #     beta_ail(parameters)
@@ -1244,20 +1440,20 @@ def simu_multi_condi(par,G_list,coeff_G_p_list,T_amb_list,u_list,T_guess_list,T_
 
 #     #return 2*N_meander*(delta/longueur)*k_ail*a*DELTA_a*gamm*DT
 
-#     #return parameters["h_inner"]
+#     #return parameters["h_back"]
 #     #return gamm
 #     return -((longueur-N_meander*D_tube)/longueur)*k_ail*a*DELTA_a*gamm*DT
 
 def change_T_sky(parameters,type):
     if type == "TUV":
-        parameters["G_p"] = 4
-        parameters["T_sky"] = ((parameters["G_p"]/parameters["sigma"]) + parameters["T_amb"]**4)**(1/4)
+        parameters["Gp"] = 4
+        parameters["T_sky"] = ((parameters["Gp"]/parameters["sigma"]) + parameters["T_amb"]**4)**(1/4)
     
     else :
         Tsk = 0.0552*parameters["T_amb"]**1.5
 
         parameters["T_sky"] = Tsk
-        parameters["G_p"] = parameters["sigma"]*(parameters["T_sky"]**4 - parameters["T_amb"]**4)
+        parameters["Gp"] = parameters["sigma"]*(parameters["T_sky"]**4 - parameters["T_amb"]**4)
 
 def change_N_ail(parameters,N):
     parameters["N_ail"] = N
@@ -1295,4 +1491,5 @@ def change_ins(par,e_ins):
 
 def change_N_fins_per_EP(par,N):
     par["N_fins_on_abs"] = (6*N)/par["N_harp"]
-    par["D_4"] = (0.160/N)
+    par["D"] = (0.160/N)
+

@@ -9,9 +9,17 @@ import model as ty
 
 import os
 
+from IPython.core.display import HTML
+
+def disp_html(df):
+    display(HTML(df.to_html()))
+
+def comp_power_coeff(coeff,A_G,T_fluid_out,G,Gp,T_fluid_in,T_amb,u):
+    return A_G*((coeff[0]-coeff[6]*(u-3))*G-(coeff[1]+coeff[3]*(u-3))*((T_fluid_in+T_fluid_out)/2 - T_amb)-coeff[4]*Gp-coeff[7]*(u-3)*Gp)
+
 # Create par
 
-def create_inputs(cond):
+def create_inputs(cond): #cond c'est le nom du fichier
     ## Meteo inputs for tests
 
     # Simulations with different meteos
@@ -32,6 +40,9 @@ def create_inputs(cond):
 
     T_guess_list = [293]
 
+    return G_list,coeff_G_p_list,u_list,T_amb_list,T_f_in_list,T_guess_list
+
+def create_inputs_from_excel(cond): # cond est le nom du fichier de données Excel
     # TUV
     path = os.getcwd()
     fichier = path+cond
@@ -40,7 +51,7 @@ def create_inputs(cond):
         axis=0, 
         inplace=True)
 
-    return G_list,coeff_G_p_list,u_list,T_amb_list,T_f_in_list,T_guess_list,condi
+    return condi
 
 def create_out():
     path = os.getcwd()
@@ -55,6 +66,8 @@ def create_out():
 
 def create_par():
     par = {}
+
+    par["version"] = 1
 
     ## Physics constants
 
@@ -85,6 +98,9 @@ def create_par():
     par["W"] = 1 # the width (x-direction) between adjacent fluid tubes
     par["Dext_tube"] = 1
     par["D_tube"] = 1 #
+    par["p_int_tube"] = 1 #
+    par["p_ext_tube"] = 1 #
+    par["w_tube"] = 1
     par["l_c"] = 1
     par["l_B"] = 1
     par["L_af"] = 1  
@@ -138,13 +154,17 @@ def create_par():
 
     # Geometry and thermal conductivities
 
+    par["lambd_glass"] = 1
+    par["k_glass"] = 1
+
     par["k_air"] = 1
     par["air_layer"] = 1
 
     par["k_abs"] = 1 # thermal conductivity of the plate material
     par["lambd_abs"] = 1 # thickness of the absorber plate
 
-    par["lambd_riser"] = 1
+    par["lambd_riser_plate"] = 1
+    par["lambd_riser_back"] = 1
     par["k_riser"] = 1
 
     par["k_ail"] = 1 # thermal conductivity of the fin
@@ -156,10 +176,11 @@ def create_par():
     par["h_top"] = 1
     par["a_htop"] = 1
     par["b_htop"] = 1 
-    par["coeff_h_top"] = 1
+    par["coeff_h_top_free"] = 1
+    par["coeff_h_top_forced"] = 1
     par["coeff_h_back"] = 1
 
-    par["h_inner"] = 1
+    par["h_back"] = 1
 
     # Ci-dessous les résistances du panneau sont calculées directement dans le fichier Inputs.xlsx
 
@@ -171,8 +192,8 @@ def create_par():
 
     ## Initialisation d'une météo
 
-    par["G_T0"] = 1 # total solar radiation (beam + diffuse) incident upon the collector surface = POA irradiance
-    par["G_p"] = 1 # infra-red 
+    par["G"] = 1 # total solar radiation (beam + diffuse) incident upon the collector surface = POA irradiance
+    par["Gp"] = 1 # infra-red 
     par["coeff_G_p"] = 1
     par["T_sky"] = 1 # sky temperature for long-wave radiation calculations
     par["T_amb"] = 1 
@@ -192,6 +213,8 @@ def create_par():
     ## Installation
 
     par["theta"] = 1 # angle of incidence
+
+    par["orientation"] = 1
 
     ## Type de test
 
@@ -229,7 +252,7 @@ def create_par():
     # Calculate delta : demi-intervalle entre deux risers (extérieur à extérieur)
     # utilisé dans gamma_2_int et Q_abs_back
     par["delta"] = (par["W"]-par["Dext_tube"])/2
-    # Calculate X_rad which depends on G_T0
+    # Calculate X_rad which depends on G
     ty.X_rad(par)
 
     # Calculate the conductance between the absorber and the fluid through any riser
@@ -238,7 +261,7 @@ def create_par():
     # Calculate h_fluid
     ty.h_fluid(par)
 
-    # Add "longueur"
+    # Add "longueur" qui est la longueur de l'absorbeur
     par["longueur"] = par["L_abs"]
 
     return par
@@ -343,5 +366,26 @@ def proc(par,test,i,test_list):
         par["N_f1"] = test_list[i]
         par["N_ail"] = test_list[i]
         par["D"] = (par["w_abs"]-par["N_ail"]*par["lambd_ail"])/(par["N_ail"]-1)
+    elif test == "N_f0_TUV":
+        par["N_f0"] = test_list[i]
+        par["N_ail"] = test_list[i]
+        par["D"] = (par["w_abs"]-par["N_ail"]*par["lambd_ail"])/(par["N_ail"]-1)
     else:
         pass
+
+def display_a_i(X):
+
+    huit = len(X[0])-1
+
+    index_coeff = ['eta0,hem','a1','a2','a3','a4','a6','a7','a8']
+
+    for l in range(huit):
+        print(index_coeff[l],' : ',round(X[0][l],3))
+
+    print(round(X[0][0] - (X[0][5]*(1.3-3)),3)*100,'%')
+
+    print(round(X[0][1] + X[0][3]*(1.3-3),1))
+
+def A0_A1(X):
+
+    return (round(X[0][0] - (X[0][5]*(1.3-3)),3),round(X[0][1] + X[0][3]*(1.3-3),1))

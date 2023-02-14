@@ -4,6 +4,8 @@ from thermo.chemical import Chemical
 from thermo.chemical import Mixture
 import numpy as np
 import scipy.constants as scc
+import sympy as sp
+import scipy.integrate as integrate
 
 from matplotlib import pyplot as plt
 
@@ -88,6 +90,9 @@ def back_h_fins(T_abs,T_amb,theta,longueur,D,L_a):
     Gr2=(g*beta*abs(DT)*D**3)*((L_a/longueur)**(1/2))*((D/L_a)**0.38)*(1/nu)**2
     Gr1=(g*beta*abs(DT)*D**4)/(math.sqrt(longueur*L_a)*nu**2)
 
+    if D>=0.055:
+        return back_h_simple(T_abs,T_amb,theta, longueur)
+
     if DT<0 and theta<=30:
         crit=Gr2*Pr*math.sin((math.pi/2) - math.radians(theta))
         if crit<=20000:
@@ -95,7 +100,7 @@ def back_h_fins(T_abs,T_amb,theta,longueur,D,L_a):
             h = (lambd/D)*Nu
             return h
         else:
-            return 2
+            return 2.
     else:
         crit=Gr1*Pr*math.cos((math.pi/2)-math.radians(theta))
         if crit<=250:
@@ -107,7 +112,7 @@ def back_h_fins(T_abs,T_amb,theta,longueur,D,L_a):
             h = (lambd/D)*Nu
             return h
         else:
-            return 2
+            return 2.
   
 def back_h_simple(T_abs,T_amb,theta,longueur): # dans 'Inputs', theta est l'angle par rapport à l'horizontale donc c'est theta_p
     
@@ -128,8 +133,12 @@ def back_h_simple(T_abs,T_amb,theta,longueur): # dans 'Inputs', theta est l'angl
     Pr = air_Pr()
     beta = 1/T_mean
 
-    if abs(DT)<=0.05:
-        return 0.5
+    # On vire ça ?
+    # if abs(DT)<=0.05:
+    #     return 0.5
+
+    if DT==0.:
+        return 0.
 
     if DT<0:
         if theta>45:
@@ -177,6 +186,46 @@ def back_h_simple(T_abs,T_amb,theta,longueur): # dans 'Inputs', theta est l'angl
     print('DT',DT)
     return h_back_mean
 
+#  local Nusselt number relations for a flat plate with a constant heat flux
+# https://courses.ansys.com/wp-content/uploads/2021/02/LT4_C2_L3-Handout-v2.pdf
+
+def Nu_forced_flat_plate_isoflux_lam(x,k,speed,nu,Pr): # 0.6 < Pr
+    Re_x = (speed*x)/nu
+    return (k/x)*0.453*Re_x**(1/2)*Pr**(1/3)
+
+def Nu_forced_flat_plate_isoflux_turb(x, k,speed,nu,Pr): # 0.6 < Pr < 60
+    Re_x = (speed*x)/nu
+    return (k/x)*0.0308*Re_x**(4/5)*Pr**(1/3)
+
+def h_top_forced(T_s,T_amb,speed,longueur):
+
+    T_mean = (T_s+T_amb)/2
+
+    g = scc.g
+
+    rho = air_rho(T_mean)
+    Cp = air_c_p()
+    mu = air_mu(T_mean)
+    nu = air_nu(T_mean)
+    lambd = air_k(T_mean)
+    alpha = (lambd)/(rho*Cp)
+    Pr = air_Pr()
+    beta = 1/T_mean
+
+    Re_c = 3.5 * 10**5
+
+    x_c = (nu*Re_c)/speed
+
+    if x_c < longueur:
+        lam = integrate.quad(Nu_forced_flat_plate_isoflux_lam,0,x_c,args=(lambd,speed,nu,Pr))[0]
+        turb = integrate.quad(Nu_forced_flat_plate_isoflux_turb,x_c,longueur,args=(lambd,speed,nu,Pr))[0]
+    else:
+        lam = integrate.quad(Nu_forced_flat_plate_isoflux_lam,0,longueur,args=(lambd,speed,nu,Pr))[0]
+        turb = 0.
+
+    return (1/longueur)*(lam+turb)
+    
+
 def top_h_simple(T_s,T_amb,theta,longueur):
     
     h_back_mean = 2.
@@ -196,8 +245,11 @@ def top_h_simple(T_s,T_amb,theta,longueur):
     Pr = air_Pr()
     beta = 1/T_mean
 
-    if abs(DT)<=0.05:
-        return 0.5
+    # if abs(DT)<=0.05:
+    #     return 0.5
+
+    if DT==0.:
+        return 0.
 
     if DT>0:
 
